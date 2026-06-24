@@ -1,2 +1,2 @@
-owner_driver_id,total_windows_tested,precision,recall,accuracy,f1_score,num_drivers_tested
-D1,4858,0.149,0.916,0.219,0.256,6
+owner_driver_id,total_windows_tested,precision,recall,accuracy,f1_score,roc_auc,decision_threshold,trip_level_accuracy,live_demo_accuracy,num_drivers_tested
+D1,462,0.455,0.755,0.868,0.567,0.921,0.1,1.0,1.0,6

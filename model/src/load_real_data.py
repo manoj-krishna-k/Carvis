@@ -29,6 +29,12 @@ RAW_GPS.txt columns (space-separated, no header row):
     6: Horizontal accuracy
     7: Course
     8: Difcourse (course variation)
+    (Additional trailing columns may be present depending on dataset
+    version/app build; we only read the first 9 by POSITION below, so
+    extra trailing fields are safely ignored rather than silently
+    shifting later column names -- this was the cause of a real bug
+    where speed_mean/median showed ~590-620, which was actually the
+    ALTITUDE column being misread as speed.)
 
 Folder structure expected:
     UAH-DRIVESET-v1/
@@ -75,9 +81,8 @@ def load_trip(trip_folder_path):
     """
     Loads RAW_ACCELEROMETERS.txt (required) and RAW_GPS.txt (optional)
     from a single trip folder, and merges speed into the accelerometer
-    data using position-based interpolation (since GPS is 1Hz and
-    accelerometer is 10Hz, and their timestamp columns don't reliably
-    share a common zero point).
+    data using nearest-timestamp matching (since GPS is 1Hz and
+    accelerometer is 10Hz).
     """
     accel_path = os.path.join(trip_folder_path, "RAW_ACCELEROMETERS.txt")
     gps_path = os.path.join(trip_folder_path, "RAW_GPS.txt")
@@ -90,8 +95,35 @@ def load_trip(trip_folder_path):
     accel_df["timestamp"] = accel_df["timestamp"].astype(float)
 
     if os.path.exists(gps_path):
-        gps_df = pd.read_csv(gps_path, sep=r"\s+", header=None, names=GPS_COLUMNS)
-        gps_df["timestamp"] = gps_df["timestamp"].astype(float)
+        # Read the file with NO fixed column names first, since some
+        # RAW_GPS.txt files have extra trailing columns beyond the 9
+        # documented ones. Giving pandas fewer names than actual columns
+        # silently misaligns every column after the mismatch -- this is
+        # what caused speed_mean/median to actually be ALTITUDE values
+        # (~590-620) in earlier runs. Reading raw and slicing by position
+        # avoids that regardless of how many trailing columns exist.
+        gps_raw = pd.read_csv(gps_path, sep=r"\s+", header=None)
+
+        if gps_raw.shape[1] < 2:
+            raise ValueError(
+                f"RAW_GPS.txt at {gps_path} has fewer than 2 columns "
+                f"(found {gps_raw.shape[1]}) -- cannot extract timestamp/speed."
+            )
+
+        gps_df = pd.DataFrame({
+            "timestamp": gps_raw.iloc[:, 0].astype(float),
+            "speed": gps_raw.iloc[:, 1].astype(float),
+        })
+
+        # Sanity check: real speed should never be in the hundreds for a
+        # car. If it is, something is still misaligned -- fail loudly
+        # instead of silently training on garbage again.
+        if gps_df["speed"].max() > 250:
+            raise ValueError(
+                f"Suspicious speed values in {gps_path} (max={gps_df['speed'].max():.1f}). "
+                "This usually means the column layout doesn't match what's expected. "
+                "Inspect the raw file manually before trusting this trip's data."
+            )
 
         # NOTE: We do NOT merge by matching timestamp VALUES across the two
         # files. In practice, the accelerometer and GPS files' timestamp

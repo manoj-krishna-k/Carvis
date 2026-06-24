@@ -150,7 +150,7 @@ export default function App() {
             </div>
             <div className="step">
               <span className="step-tag">model</span>
-              <p>Isolation Forest trained only on the owner's normal driving -- anything unfamiliar gets isolated</p>
+              <p>XGBoost classifier trained on the owner's driving fingerprint vs all other drivers in UAH-DriveSet</p>
             </div>
             <div className="step">
               <span className="step-tag">output</span>
@@ -161,7 +161,7 @@ export default function App() {
       </main>
 
       <footer className="app-footer">
-        Built with Isolation Forest &middot; FastAPI &middot; React -- trained on real driving telemetry
+        Built with XGBoost &middot; FastAPI &middot; React — trained on real UAH-DriveSet telemetry
       </footer>
     </div>
   );

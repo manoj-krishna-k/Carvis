@@ -1,77 +1,46 @@
 """
 CARVIS - Export Test Pool for Backend
 -------------------------------------------
-Run this AFTER train_model.py and evaluate_model.py work correctly.
+Run this AFTER train_model.py and evaluate_model.py succeed.
 
-This creates two files that the FastAPI backend reads directly:
-    1. test_pool.csv    -> every feature window + its true driver/behavior label
-                           (used for the "Test Random Driver" button)
-    2. model_stats.csv  -> precision, recall, accuracy numbers
-                           (used for the "Model Performance" screen)
-
-Also COPIES the trained model files into backend/trained_models/ so the
-backend has everything it needs in one place.
+Copies the trained XGBoost artifacts + the held-out test split + model
+stats into backend/trained_models/, so the FastAPI backend has everything
+it needs without any manual file copying.
 """
 
-import pandas as pd
-import joblib
-import shutil
-import os
-from sklearn.metrics import precision_score, recall_score, accuracy_score, f1_score
+from __future__ import annotations
 
-FEATURE_COLUMNS = [
-    "accel_x_mean", "accel_x_std", "accel_y_mean", "accel_y_std", "accel_z_std",
-    "yaw_std", "yaw_range", "harsh_accel_count", "harsh_turn_count",
-    "speed_mean", "speed_std"
+import os
+import shutil
+
+FILES_TO_COPY = [
+    "xgb_model.pkl",
+    "scaler.pkl",
+    "feature_columns.pkl",
+    "owner_driver.pkl",
+    "test_split.csv",
+    "model_stats.csv",
 ]
 
-if __name__ == "__main__":
-    model = joblib.load("../trained_models/isolation_forest.pkl")
-    OWNER_DRIVER_ID = joblib.load("../trained_models/owner_driver_id.pkl")
 
-    df = pd.read_csv("../data/all_features.csv")
-    df = df.dropna(subset=FEATURE_COLUMNS).reset_index(drop=True)
+def main() -> None:
+    model_dir = "../trained_models"
+    backend_dir = "../../backend/trained_models"
 
-    # ---- Save the full feature set as the test pool (with ground truth) ----
-    test_pool = df[FEATURE_COLUMNS + ["driver_id", "behavior", "road", "trip_folder"]].copy()
-    test_pool.to_csv("../trained_models/test_pool.csv", index=False)
-    print(f"Saved test_pool.csv with {len(test_pool)} windows")
+    os.makedirs(backend_dir, exist_ok=True)
 
-    # ---- Compute and save model performance stats ----
-    df["true_label"] = df["driver_id"].apply(lambda d: 1 if d == OWNER_DRIVER_ID else -1)
-    predictions = model.predict(df[FEATURE_COLUMNS])
+    missing = [f for f in FILES_TO_COPY if not os.path.exists(os.path.join(model_dir, f))]
+    if missing:
+        print(f"ERROR: missing expected files in {model_dir}: {missing}")
+        print("Run train_model.py and evaluate_model.py first.")
+        return
 
-    stats = {
-        "owner_driver_id": OWNER_DRIVER_ID,
-        "total_windows_tested": len(df),
-        "precision": round(precision_score(df["true_label"], predictions, pos_label=1), 3),
-        "recall": round(recall_score(df["true_label"], predictions, pos_label=1), 3),
-        "accuracy": round(accuracy_score(df["true_label"], predictions), 3),
-        "f1_score": round(f1_score(df["true_label"], predictions, pos_label=1), 3),
-        "num_drivers_tested": df["driver_id"].nunique(),
-    }
+    for filename in FILES_TO_COPY:
+        shutil.copy(os.path.join(model_dir, filename), os.path.join(backend_dir, filename))
 
-    stats_df = pd.DataFrame([stats])
-    stats_df.to_csv("../trained_models/model_stats.csv", index=False)
-    print(f"Saved model_stats.csv:")
-    print(stats_df.T)
-
-    # ---- Copy everything backend needs into backend/trained_models/ ----
-    backend_models_dir = "../../backend/trained_models"
-    os.makedirs(backend_models_dir, exist_ok=True)
-
-    files_to_copy = [
-        "isolation_forest.pkl",
-        "feature_columns.pkl",
-        "owner_driver_id.pkl",
-        "test_pool.csv",
-        "model_stats.csv",
-    ]
-
-    for filename in files_to_copy:
-        src = os.path.join("../trained_models", filename)
-        dst = os.path.join(backend_models_dir, filename)
-        shutil.copy(src, dst)
-
-    print(f"\nCopied all model files to: backend/trained_models/")
+    print(f"Copied all model files to: {backend_dir}/")
     print("Backend is ready to run.")
+
+
+if __name__ == "__main__":
+    main()

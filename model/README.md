@@ -1,73 +1,99 @@
-# CARVIS Model Folder — Real Data Version
+# CARVIS Model Folder (v2 — XGBoost)
 
-## WHERE TO PUT YOUR DATASET (do this first)
+## WHAT CHANGED FROM v1
 
-1. Unzip your downloaded UAH-DriveSet.
-2. Copy the WHOLE unzipped folder (the one containing D1, D2, D3...) into:
-   ```
-   model/data/UAH-DRIVESET-v1/
-   ```
-   So the final path looks like:
-   ```
-   model/data/UAH-DRIVESET-v1/D1/20151110175712-Aggressive-MOTORWAY/RAW_ACCELEROMETERS.txt
-   model/data/UAH-DRIVESET-v1/D2/...
-   ```
+The model is now an **XGBoost binary classifier** instead of Isolation
+Forest. Reasons and tradeoffs:
 
-3. If your unzipped folder has a DIFFERENT name (not "UAH-DRIVESET-v1"),
-   either rename it to match, OR open `src/load_real_data.py` and change
-   this line near the bottom to match your actual folder name:
-   ```python
-   DATASET_ROOT = "../data/UAH-DRIVESET-v1"
-   ```
+- v1 (Isolation Forest) trained ONLY on the owner's data -- no labeled
+  intruder examples needed, "anything unfamiliar gets flagged." Honest
+  pitch, but in testing it under-performed on real noisy sensor data.
+- v2 (XGBoost) trains on owner (label=1) vs every other driver (label=0).
+  Needs labeled "other driver" data during training, but is generally
+  more accurate when that data is available -- which it is, since
+  UAH-DriveSet has 6 drivers.
 
-   NOTE: when you unzip the dataset, you may get a folder INSIDE a folder
-   with the same name (e.g. `UAH-DRIVESET-v1/UAH-DRIVESET-v1/D1/...`).
-   Always point DATASET_ROOT at the folder that DIRECTLY contains D1, D2, etc.
+This is a genuine tradeoff worth knowing for your presentation: v2 is a
+proper binary classifier, not a pure one-class anomaly detector.
 
-   Trip subfolder names look like:
-   `20151111135612-13km-D1-DROWSY-SECONDARY`
-   (format: TIMESTAMP-DISTANCEkm-DRIVERID-BEHAVIOR-ROAD)
+## WHERE TO PUT YOUR DATASET (unchanged from before)
 
-## HOW TO RUN (in order)
+```
+model/data/UAH-DRIVESET-v1/D1/<trip folder>/RAW_ACCELEROMETERS.txt
+model/data/UAH-DRIVESET-v1/D1/<trip folder>/RAW_GPS.txt
+model/data/UAH-DRIVESET-v1/D2/...
+```
+
+If your unzipped folder has a different name, edit `DATASET_ROOT` at the
+bottom of `load_real_data.py`.
+
+## PIPELINE FILES (run in this order)
 
 ```
 cd model/src
-pip install pandas scikit-learn joblib
+pip install pandas numpy scipy scikit-learn xgboost joblib matplotlib
 
-python load_real_data.py       # Step 1: scans dataset, combines into one CSV
-python extract_features.py     # Step 2: converts raw data into behavior features
-python train_model.py          # Step 3: trains model on one driver as "the owner"
-python evaluate_model.py       # Step 4: prints precision/recall/confusion matrix
+python load_real_data.py       # unchanged -- scans dataset, fixes the
+                                # accel/GPS timestamp-merge bug, saves
+                                # combined_raw.csv
+python extract_features.py     # NEW -- 58 auto-generated statistical +
+                                # engineered features per 100-row window
+python train_model.py          # NEW -- trip-based split (every driver's
+                                # trips split independently, no leakage),
+                                # StandardScaler + XGBClassifier
+python evaluate_model.py       # NEW -- accuracy/precision/recall/F1/
+                                # ROC-AUC, confusion matrix, ROC curve PNG
+python export_test_pool.py     # copies artifacts into backend/trained_models/
+python predict.py              # optional smoke test -- scores one random
+                                # held-out window
 ```
 
-## IF load_real_data.py GIVES ERRORS
+## KEY DESIGN DECISIONS
 
-The script prints exactly what it found vs what it expected. Common issues:
+**Window size**: 100 raw rows, non-overlapping. At ~10Hz that's ~10
+seconds per window. Incomplete trailing windows are skipped.
 
-- **"Path does not exist"** -> your folder name doesn't match, fix DATASET_ROOT
-- **"No driver folders (D1, D2...) found"** -> check you copied the right folder level
-- **"Folder name doesn't match expected pattern"** -> your trip folder names are
-  named differently than `20151110175712-Aggressive-MOTORWAY`. Paste me the
-  actual folder name and I'll adjust the pattern matching.
+**Features**: for each of accel_x, accel_y, accel_z, yaw, speed --
+mean, std, min, max, median, p25, p75, rms, skew, kurtosis. Plus
+yaw_range, speed_range, harsh_accel_count, harsh_brake_count,
+harsh_turn_count, and signal energy for the three accel axes.
+`FEATURE_COLUMNS` in `extract_features.py` is generated automatically --
+never hardcoded elsewhere.
+
+**No data leakage**: `data_split.py` splits EVERY driver's trips
+independently into train/test (default 70/30). No trip ever appears on
+both sides. This means the owner has some trips in train and some held
+out in test, and so does every other driver -- so both precision (did
+we wrongly flag the owner?) and recall (did we catch the intruder?) are
+measured on genuinely unseen trips.
+
+**Decision threshold**: loaded automatically from `model_stats.csv`
+(produced by `evaluate_model.py`). The backend no longer hardcodes 0.9,
+which was far too strict for XGBoost probabilities on real driving data and
+caused almost every window — including the owner — to be labeled INTRUDER.
+Change the threshold by re-running `evaluate_model.py` and
+`export_test_pool.py`, or override it temporarily in `predict.py`.
 
 ## CHOOSING WHO IS "THE OWNER"
 
-Open `train_model.py` and change this line to pick any driver (D1 through D6,
-depending on how many drivers your download has):
+Edit this line in `train_model.py`:
 ```python
-OWNER_DRIVER_ID = "D1"
+OWNER_DRIVER: str = "D1"
 ```
 
 ## OUTPUT FILES (created automatically)
 
 ```
-data/combined_raw.csv         <- all raw sensor data combined, one row per reading
-data/all_features.csv         <- behavior features per time window (this is what the model uses)
-trained_models/isolation_forest.pkl    <- the trained model
-trained_models/feature_columns.pkl     <- list of feature names (used by backend later)
-trained_models/owner_driver_id.pkl     <- which driver was treated as the owner
+data/combined_raw.csv             <- all raw sensor data combined
+data/all_features.csv             <- 58 features per window, all drivers/trips
+trained_models/xgb_model.pkl      <- trained XGBoost classifier
+trained_models/scaler.pkl         <- fitted StandardScaler
+trained_models/feature_columns.pkl
+trained_models/owner_driver.pkl
+trained_models/test_split.csv     <- the exact held-out test set (reused by evaluate_model.py)
+trained_models/model_stats.csv    <- precision/recall/F1/ROC-AUC (read by backend)
+trained_models/roc_curve.png      <- ROC curve plot
 ```
 
-These three files in `trained_models/` are what the FastAPI backend will load
-next — once this model folder is working, send me the output of
-`evaluate_model.py` and we move to building the backend.
+`export_test_pool.py` copies the artifacts the backend needs into
+`backend/trained_models/` automatically -- no manual copying required.

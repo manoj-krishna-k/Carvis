@@ -2,10 +2,10 @@ export default function ModelStatsPanel({ stats }) {
   if (!stats) return null;
 
   const items = [
-    { label: "Precision", value: stats.precision, desc: "Of all 'owner' predictions, how many were right" },
-    { label: "Recall", value: stats.recall, desc: "Of all real owner windows, how many were caught" },
-    { label: "Accuracy", value: stats.accuracy, desc: "Overall correct predictions" },
-    { label: "F1 Score", value: stats.f1_score, desc: "Balance of precision and recall" },
+    { label: "Live Demo", value: stats.live_demo_accuracy ?? stats.trip_level_accuracy, desc: "Correct on held-out full trips (how the demo scores)" },
+    { label: "ROC-AUC", value: stats.roc_auc, desc: "Overall separation between owner and intruder windows" },
+    { label: "Window Accuracy", value: stats.accuracy, desc: "Single-window classification on test set" },
+    { label: "Owner Recall", value: stats.recall, desc: "Of all real owner windows, how many were caught" },
   ];
 
   return (
