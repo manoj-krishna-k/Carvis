@@ -59,6 +59,77 @@ test_pool = pd.read_csv(test_pool_path) if os.path.exists(test_pool_path) else N
 # ---- In-memory session scoreboard (resets when server restarts) ----
 scoreboard = {"total": 0, "correct": 0}
 
+# ---- Human-readable behavioral features used for the owner-vs-driver
+# deviation graphs in the dashboard. Keys must exist in feature_columns. ----
+COMPARISON_FEATURES: list[tuple[str, str]] = [
+    ("speed_mean", "Cruising speed"),
+    ("jerk_x_mean", "Steering smoothness"),
+    ("lat_long_ratio", "Cornering vs accel balance"),
+    ("accel_x_kf_std", "Lateral (steering) jitter"),
+    ("jerk_y_mean", "Throttle / brake smoothness"),
+    ("yaw_mean", "Average turn rate"),
+    ("accel_y_kf_std", "Accel / brake variability"),
+    ("jerk_z_mean", "Ride harshness"),
+]
+
+_feature_index = {col: i for i, col in enumerate(feature_columns)}
+
+
+def _owner_baseline_means() -> pd.Series:
+    """Mean feature vector of the owner's held-out windows (the fingerprint)."""
+    if test_pool is None or len(test_pool) == 0:
+        return pd.Series(0.0, index=feature_columns)
+    owner_rows = test_pool[test_pool["driver_id"] == owner_driver_id]
+    if len(owner_rows) == 0:
+        return pd.Series(0.0, index=feature_columns)
+    return owner_rows[feature_columns].astype(float).mean()
+
+
+OWNER_BASELINE = _owner_baseline_means()
+
+
+def overall_deviation(driver_means: pd.Series) -> float:
+    """
+    Euclidean distance between the driver's mean behavior and the owner's,
+    measured in standard-deviation (sigma) units across ALL features.
+    A larger number means the driving pattern is further from the owner's.
+    """
+    diff = (
+        driver_means[feature_columns].to_numpy(dtype=float)
+        - OWNER_BASELINE[feature_columns].to_numpy(dtype=float)
+    ) / scaler.scale_
+    return float(np.sqrt(np.nansum(np.square(diff))))
+
+
+def feature_deviation(driver_means: pd.Series) -> list[dict]:
+    """Per-feature owner-vs-driver comparison for the deviation graphs."""
+    feats: list[dict] = []
+    for key, label in COMPARISON_FEATURES:
+        idx = _feature_index[key]
+        scale = float(scaler.scale_[idx]) or 1.0
+        owner_v = float(OWNER_BASELINE[key])
+        driver_v = float(driver_means[key])
+        feats.append(
+            {
+                "key": key,
+                "label": label,
+                "owner": round(owner_v, 4),
+                "driver": round(driver_v, 4),
+                "deviation_sigma": round((driver_v - owner_v) / scale, 3),
+            }
+        )
+    return feats
+
+
+def build_comparison(trip_df: pd.DataFrame) -> dict:
+    """Full owner-vs-driver comparison payload that powers the dashboard graphs."""
+    driver_means = trip_df[feature_columns].astype(float).mean()
+    return {
+        "owner_driver_id": owner_driver_id,
+        "overall_deviation": round(overall_deviation(driver_means), 3),
+        "features": feature_deviation(driver_means),
+    }
+
 
 def score_trip(trip_df: pd.DataFrame) -> tuple[str, float]:
     """
@@ -111,13 +182,7 @@ def reset_scoreboard():
     return {"message": "Scoreboard reset"}
 
 
-@app.get("/api/test-random")
-def test_random_driver():
-    """
-    Picks a random held-out TRIP (all windows from one unseen drive),
-    scores it with mean window probability, and compares to ground truth.
-    Trip-level scoring is much more reliable than a single random window.
-    """
+def _require_test_pool() -> None:
     if test_pool is None or len(test_pool) == 0:
         raise HTTPException(
             status_code=500,
@@ -125,24 +190,25 @@ def test_random_driver():
                    "then export_test_pool.py in the model folder first.",
         )
 
-    trip_keys = test_pool[["driver_id", "trip_folder"]].drop_duplicates()
-    chosen = trip_keys.sample(n=1).iloc[0]
-    trip_df = test_pool[
-        (test_pool["driver_id"] == chosen["driver_id"])
-        & (test_pool["trip_folder"] == chosen["trip_folder"])
-    ]
-    representative = trip_df.iloc[len(trip_df) // 2]
 
+def build_trip_result(trip_df: pd.DataFrame, *, count_in_scoreboard: bool) -> dict:
+    """
+    Scores one driver's trip, compares it to the owner fingerprint, and
+    returns the full payload the dashboard renders. Shared by the random
+    test and the explicit per-driver test so both behave identically.
+    """
+    representative = trip_df.iloc[len(trip_df) // 2]
     predicted_label, probability = score_trip(trip_df)
 
-    actual_driver = chosen["driver_id"]
+    actual_driver = str(representative["driver_id"])
     actual_behavior = representative["behavior"]
     true_label = "owner" if actual_driver == owner_driver_id else "intruder"
     was_correct = predicted_label == true_label
 
-    scoreboard["total"] += 1
-    if was_correct:
-        scoreboard["correct"] += 1
+    if count_in_scoreboard:
+        scoreboard["total"] += 1
+        if was_correct:
+            scoreboard["correct"] += 1
 
     return {
         "sensor_window": {
@@ -167,7 +233,75 @@ def test_random_driver():
         },
         "was_correct": was_correct,
         "owner_driver_id": owner_driver_id,
+        "comparison": build_comparison(trip_df),
     }
+
+
+@app.get("/api/test-random")
+def test_random_driver():
+    """
+    Picks a random held-out TRIP (all windows from one unseen drive),
+    scores it with mean window probability, and compares to ground truth.
+    Trip-level scoring is much more reliable than a single random window.
+    """
+    _require_test_pool()
+
+    trip_keys = test_pool[["driver_id", "trip_folder"]].drop_duplicates()
+    chosen = trip_keys.sample(n=1).iloc[0]
+    trip_df = test_pool[
+        (test_pool["driver_id"] == chosen["driver_id"])
+        & (test_pool["trip_folder"] == chosen["trip_folder"])
+    ]
+    return build_trip_result(trip_df, count_in_scoreboard=True)
+
+
+@app.get("/api/drivers")
+def list_drivers():
+    """
+    Lists every driver in the held-out pool with a one-glance summary of
+    how far their driving sits from the owner's fingerprint. Powers the
+    driver selector and the "deviation across all drivers" overview chart.
+    """
+    _require_test_pool()
+
+    drivers = []
+    for driver_id, driver_df in test_pool.groupby("driver_id"):
+        driver_means = driver_df[feature_columns].astype(float).mean()
+        predicted_label, probability = score_trip(driver_df)
+        behaviors = sorted(driver_df["behavior"].dropna().unique().tolist())
+        drivers.append(
+            {
+                "driver_id": str(driver_id),
+                "is_owner": str(driver_id) == owner_driver_id,
+                "behaviors": behaviors,
+                "windows": int(len(driver_df)),
+                "overall_deviation": round(overall_deviation(driver_means), 3),
+                "predicted_label": predicted_label,
+                "confidence_score": round(probability, 4),
+            }
+        )
+
+    drivers.sort(key=lambda d: (not d["is_owner"], d["driver_id"]))
+    return {"owner_driver_id": owner_driver_id, "drivers": drivers}
+
+
+@app.get("/api/test-driver")
+def test_specific_driver(driver_id: str):
+    """
+    Scores a deliberately chosen driver (any of D1..Dn) against the owner
+    model. Lets you pick the input rather than relying on a blind random
+    draw. Does NOT touch the blind live-accuracy scoreboard.
+    """
+    _require_test_pool()
+
+    driver_df = test_pool[test_pool["driver_id"] == driver_id]
+    if len(driver_df) == 0:
+        available = sorted(test_pool["driver_id"].unique().tolist())
+        raise HTTPException(
+            status_code=404,
+            detail=f"Driver '{driver_id}' not found. Available drivers: {available}",
+        )
+    return build_trip_result(driver_df, count_in_scoreboard=False)
 
 
 @app.get("/api/model-stats")

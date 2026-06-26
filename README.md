@@ -6,8 +6,8 @@ A behavioral-fingerprinting vehicle security system. Instead of tracking
 rhythm, braking sharpness, turning style — and flags the moment someone
 else's driving pattern shows up.
 
-Built on real driving telemetry (UAH-DriveSet), an Isolation Forest
-anomaly detection model, a FastAPI backend, and a React dashboard.
+Built on real driving telemetry (UAH-DriveSet), an XGBoost
+owner-vs-intruder classifier, a FastAPI backend, and a React dashboard.
 
 ---
 
@@ -64,13 +64,17 @@ Open the URL Vite prints (usually `http://localhost:5173`).
 1. Open the dashboard — explain the concept in one line: *"the car learns
    how the owner drives, not where the car is."*
 2. Click **"Test Random Driver"** a few times. Each click pulls a real,
-   unseen window from the dataset — neither you nor the model know in
+   unseen trip from the dataset — neither you nor the model know in
    advance whether it's the owner or another driver.
-3. Point at the scoreboard — it's accumulating live, in front of them.
-4. Scroll to **Model Performance** — show precision/recall as proof,
+3. Pick a specific driver (D1–D6) from the **driver selector** to feed a
+   chosen input into the model instead of a blind random draw.
+4. Point at the scoreboard — it's accumulating live, in front of them.
+5. Scroll to the **deviation graphs** — show, per driving habit, how far
+   the selected driver sits from the owner's fingerprint (in σ units).
+6. Scroll to **Model Performance** — show precision/recall as proof,
    not just a claim.
-5. Use the **"How this works"** section to walk through the pipeline:
-   real data → feature engineering → Isolation Forest → live verdict.
+7. Use the **"How this works"** section to walk through the pipeline:
+   real data → feature engineering → XGBoost classifier → live verdict.
 
 ---
 

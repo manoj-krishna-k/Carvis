@@ -23,3 +23,15 @@ export async function getModelStats() {
   if (!res.ok) throw new Error("Failed to fetch model stats");
   return res.json();
 }
+
+export async function getDrivers() {
+  const res = await fetch(`${API_BASE}/api/drivers`);
+  if (!res.ok) throw new Error("Failed to fetch drivers");
+  return res.json();
+}
+
+export async function testDriver(driverId) {
+  const res = await fetch(`${API_BASE}/api/test-driver?driver_id=${encodeURIComponent(driverId)}`);
+  if (!res.ok) throw new Error("Failed to fetch driver result");
+  return res.json();
+}

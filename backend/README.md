@@ -40,13 +40,19 @@ Run things in this exact order:
 ## ENDPOINTS
 
 - `GET /` — health check, shows project info
-- `GET /api/test-random` — picks a random unseen driving window, returns
-  prediction + ground truth (this powers the "Test Random Driver" button)
+- `GET /api/test-random` — picks a random unseen driving trip, returns
+  prediction + ground truth + owner-vs-driver comparison (this powers the
+  "Test Random Driver" button)
+- `GET /api/drivers` — lists every driver in the held-out pool (D1 = owner)
+  with a one-glance summary of how far each sits from the owner's
+  fingerprint; powers the driver selector and the all-drivers overview chart
+- `GET /api/test-driver?driver_id=Dx` — scores a deliberately chosen driver
+  against the owner model (does NOT touch the blind live-accuracy scoreboard)
 - `GET /api/scoreboard` — running accuracy across the demo session
 - `POST /api/scoreboard/reset` — resets the scoreboard to 0
 - `GET /api/model-stats` — precision/recall/accuracy from evaluation
 
-## IF YOU SEE "FileNotFoundError: trained_models/isolation_forest.pkl"
+## IF YOU SEE "FileNotFoundError: trained_models/xgb_model.pkl"
 
 This means you skipped step 2 above. Go back to the model folder and run
 `export_test_pool.py` — it copies the required files here automatically.
