@@ -10,6 +10,7 @@ Isolation Forest / anomaly scores (removed entirely).
 
 Run with:
     uvicorn main:app --reload --port 8000
+
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import os
 import joblib
 import numpy as np
 import pandas as pd
+from alerts import router as alerts_router, trigger_intruder_alert
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -31,6 +33,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(alerts_router)
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "trained_models")
 
@@ -141,6 +145,13 @@ def score_trip(trip_df: pd.DataFrame) -> tuple[str, float]:
     probabilities = model.predict_proba(X_scaled)[:, 1]
     mean_probability = float(np.mean(probabilities))
     label = "owner" if mean_probability >= DECISION_THRESHOLD else "intruder"
+
+    if label == "intruder":
+        try:
+            trigger_intruder_alert()
+        except RuntimeError:
+            pass  # app not registered yet, skip push
+
     return label, mean_probability
 
 

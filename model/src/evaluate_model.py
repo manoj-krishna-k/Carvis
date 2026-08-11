@@ -54,8 +54,84 @@ def load_artifacts():
     return model, scaler, feature_columns, owner_driver, test_df
 
 
+def _check_overfitting(model) -> None:
+    evals_result = None
+    if hasattr(model, "evals_result"):
+        try:
+            evals_result = model.evals_result()
+        except Exception:
+            evals_result = None
+    if not evals_result and hasattr(model, "evals_result_"):
+        evals_result = getattr(model, "evals_result_", None)
+
+    if not evals_result or not isinstance(evals_result, dict):
+        print("Overfitting check: no evaluation history found in model.")
+        return
+
+    eval_sets = list(evals_result.keys())
+    if not eval_sets:
+        print("Overfitting check: evaluation history is empty.")
+        return
+
+    train_key = None
+    val_key = None
+    for key in eval_sets:
+        lower = key.lower()
+        if "train" in lower:
+            train_key = key
+            continue
+        if "valid" in lower or "validation" in lower:
+            if val_key is None:
+                val_key = key
+    if train_key is None:
+        train_key = eval_sets[0]
+    if val_key is None and len(eval_sets) > 1:
+        val_key = eval_sets[1]
+
+    if val_key is None:
+        print("Overfitting check: only one eval dataset found; cannot compare train vs validation.")
+        return
+
+    common_metrics = set(evals_result[train_key]).intersection(evals_result[val_key])
+    if not common_metrics:
+        print("Overfitting check: no shared metrics between training and validation histories.")
+        return
+
+    preferred_metrics = ["auc", "aucpr", "logloss", "error", "rmse", "mae"]
+    metric = next((m for m in preferred_metrics if m in common_metrics), sorted(common_metrics)[0])
+    train_history = evals_result[train_key][metric]
+    val_history = evals_result[val_key][metric]
+    if not train_history or not val_history:
+        print(f"Overfitting check: missing metric history for {metric}.")
+        return
+
+    train_final = train_history[-1]
+    val_final = val_history[-1]
+    if metric in ("auc", "aucpr"):
+        diff = train_final - val_final
+        print(
+            f"Overfitting check: final train {metric} = {train_final:.3f}, "
+            f"validation {metric} = {val_final:.3f}, diff = {diff:.3f}"
+        )
+        if diff > 0.05:
+            print("Overfitting warning: training performance exceeds validation performance by more than 0.05.")
+        else:
+            print("Overfitting check: no strong evidence of overfitting from eval history.")
+    else:
+        diff = val_final - train_final
+        print(
+            f"Overfitting check: final train {metric} = {train_final:.3f}, "
+            f"validation {metric} = {val_final:.3f}, diff = {diff:.3f}"
+        )
+        if diff > 0.02:
+            print("Overfitting warning: validation loss/error is notably higher than training.")
+        else:
+            print("Overfitting check: no strong evidence of overfitting from eval history.")
+
+
 def main() -> None:
     model, scaler, feature_columns, owner_driver, test_df = load_artifacts()
+    _check_overfitting(model)
 
     X_test = test_df[feature_columns].to_numpy(dtype=float)
     y_true = (test_df["driver_id"] == owner_driver).astype(int).to_numpy()
